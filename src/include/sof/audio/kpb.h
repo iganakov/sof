@@ -171,6 +171,26 @@ struct kpb_micselector_config {
 	/* channel bit set to 1 implies channel selection */
 	uint32_t mask;
 };
+
+#ifdef CONFIG_AMS
+#include <sof/lib/ams.h>
+
+/* Key-phrase detected AMS message*/
+extern const uint8_t ams_kpd_msg_uuid[UUID_SIZE];
+
+/* Register KPB client AMS message*/
+extern const uint8_t ams_reg_cli_msg_uuid[UUID_SIZE];
+
+/* AMS message producer helpers*/
+int kpb_register_ams_producer(const struct comp_dev *dev,
+			      struct ams_message_payload *payload,
+			      const uint8_t *msg_uuid,
+			      uint32_t ams_uuid_id);
+
+int kpb_unregister_ams_producer(const struct comp_dev *dev,
+				uint32_t ams_uuid_id);
+#endif /* CONFIG_AMS */
+
 #ifdef UNIT_TEST
 void sys_comp_kpb_init(void);
 #endif

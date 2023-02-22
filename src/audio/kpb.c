@@ -27,7 +27,6 @@
 #include <rtos/clk.h>
 #include <rtos/init.h>
 #include <sof/lib/memory.h>
-#include <sof/lib/notifier.h>
 #include <sof/lib/pm_runtime.h>
 #include <sof/lib/uuid.h>
 #include <sof/list.h>
@@ -47,6 +46,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <sof/lib/notifier.h>
 
 static const struct comp_driver comp_kpb;
 
@@ -95,10 +95,17 @@ struct comp_data {
 	uint32_t num_of_in_channels;
 	uint32_t offsets[KPB_MAX_MICSEL_CHANNELS];
 	struct kpb_micselector_config mic_sel;
+
+#if CONFIG_AMS
+	uint32_t kpd_uuid_id;
+	uint32_t reg_cli_uuid_id;
+#endif
 };
 
 /*! KPB private functions */
+#ifndef CONFIG_AMS
 static void kpb_event_handler(void *arg, enum notify_id type, void *event_data);
+#endif
 static int kpb_register_client(struct comp_data *kpb, struct kpb_client *cli);
 static void kpb_init_draining(struct comp_dev *dev, struct kpb_client *cli);
 static enum task_state kpb_draining_task(void *arg);
@@ -129,6 +136,179 @@ static uint64_t kpb_task_deadline(void *data)
 {
 	return SOF_TASK_DEADLINE_ALMOST_IDLE;
 }
+
+#if CONFIG_AMS
+/* AMS messages uuids*/
+/* Key-phrase detected uuid: 80a11122-b36c-11ed-afa1-0242ac120002 */
+const uint8_t ams_kpd_msg_uuid[UUID_SIZE] = {0x80, 0xa1, 0x11, 0x22, 0xb3, 0x6c,
+					     0x11, 0xed, 0xaf, 0xa1, 0x02, 0x42,
+					     0xac, 0x12, 0x00, 0x02};
+
+/* Register KPB client uuid: c5d9850f-cbdd-4bf4-9c6a-43dfc5faee9f*/
+const uint8_t ams_reg_cli_msg_uuid[UUID_SIZE] = {0xcd, 0x59, 0x85, 0x0f, 0xdd,
+						 0xcb, 0xf4, 0x4b, 0x9c, 0x6a,
+						 0x43, 0xdf, 0xc5, 0xfa, 0xee,
+						 0x9f};
+
+static void
+kpb_ams_kpd_notification(const struct ams_message_payload *const ams_message_payload,
+				     void *ctx)
+{
+	struct kpb_client *cli_data = (struct kpb_client *)ams_message_payload->message;
+	struct comp_dev *dev = ctx;
+
+	comp_dbg(dev, "kpb_ams_kpd_notification()");
+
+	kpb_init_draining(dev, cli_data);
+}
+
+static void
+kpb_ams_register_cli_notification(const struct ams_message_payload *const ams_message_payload,
+					      void *ctx)
+{
+	struct kpb_client *cli_data = (struct kpb_client *)ams_message_payload->message;
+	struct comp_dev *dev = ctx;
+	struct comp_data *kpb = comp_get_drvdata(dev);
+	int ret;
+
+	comp_dbg(dev, "kpb_ams_register_cli_notification()");
+
+	ret = kpb_register_client(kpb, cli_data);
+	if (ret)
+		comp_err(dev, "kpb_ams_register_cli_notification(): register client error");
+}
+
+static int kpb_register_ams_consumer(struct comp_dev *dev,
+				     const uint8_t *msg_uuid,
+				     uint32_t ams_uuid_id,
+				     ams_msg_callback_fn callback)
+{
+	uint16_t mod_id, inst_id;
+	int ret;
+
+	comp_dbg(dev, "kpb_register_ams_consumer()");
+
+#ifdef CONFIG_IPC_MAJOR_4
+	mod_id = IPC4_MOD_ID(dev_comp_id(dev));
+	inst_id = IPC4_INST_ID(dev_comp_id(dev));
+#else
+	/* In IPC3 case KPB could be created only once so instance id = 0 */
+	mod_id = dev_comp_type(dev);
+	inst_id = 0;
+#endif
+
+	ret = ams_get_message_type_id(msg_uuid, &ams_uuid_id);
+	if (ret)
+		return ret;
+
+	return ams_register_consumer(ams_uuid_id, mod_id, inst_id, callback, dev);
+}
+
+static int kpb_unregister_ams_consumer(struct comp_dev *dev,
+				       uint32_t ams_uuid_id,
+				       ams_msg_callback_fn callback)
+{
+#ifdef CONFIG_IPC_MAJOR_4
+	uint16_t mod_id = IPC4_MOD_ID(dev_comp_id(dev));
+	uint16_t inst_id = IPC4_INST_ID(dev_comp_id(dev));
+#else
+	/* In IPC3 case KPB could be created only once so instance id = 0 */
+	uint16_t mod_id = dev_comp_type(dev);
+	uint16_t inst_id = 0;
+#endif
+	comp_dbg(dev, "kpb_unregister_ams_consumer()");
+
+	return ams_unregister_consumer(ams_uuid_id, mod_id, inst_id, callback);
+}
+
+int kpb_register_ams_producer(const struct comp_dev *dev,
+			      struct ams_message_payload *payload,
+			      const uint8_t *msg_uuid,
+			      uint32_t ams_uuid_id)
+{
+	uint16_t mod_id, inst_id;
+	int ret;
+
+	comp_dbg(dev, "kpb_register_ams_producer()");
+
+#ifdef CONFIG_IPC_MAJOR_4
+	mod_id = IPC4_MOD_ID(dev_comp_id(dev));
+	inst_id = IPC4_INST_ID(dev_comp_id(dev));
+#else
+	/* In IPC3 case detector could be created only once so instance id = 0 */
+	mod_id = dev_comp_type(dev);
+	inst_id = 0;
+#endif
+
+	ret = ams_get_message_type_id(msg_uuid, &ams_uuid_id);
+	if (ret)
+		return ret;
+
+	ret = ams_register_producer(ams_uuid_id, mod_id, inst_id);
+	if (ret)
+		return ret;
+
+	payload->message_type_id = ams_uuid_id;
+	payload->producer_module_id = mod_id;
+	payload->producer_instance_id = inst_id;
+
+	return 0;
+}
+
+int kpb_unregister_ams_producer(const struct comp_dev *dev,
+				uint32_t ams_uuid_id)
+{
+#ifdef CONFIG_IPC_MAJOR_4
+	uint16_t mod_id = IPC4_MOD_ID(dev_comp_id(dev));
+	uint16_t inst_id = IPC4_INST_ID(dev_comp_id(dev));
+#else
+	/* In IPC3 case detector could be created only once so instance id = 0 */
+	uint16_t mod_id = dev_comp_type(dev);
+	uint16_t inst_id = 0;
+#endif
+
+	comp_dbg(dev, "test_keyword_unregister_ams_producer()");
+
+	return ams_unregister_producer(ams_uuid_id, mod_id, inst_id);
+}
+
+#else
+/**
+ * \brief Main event dispatcher.
+ * \param[in] arg - KPB component internal data.
+ * \param[in] type - notification type
+ * \param[in] event_data - event specific data.
+ * \return none.
+ */
+static void kpb_event_handler(void *arg, enum notify_id type, void *event_data)
+{
+	struct comp_dev *dev = arg;
+	struct comp_data *kpb = comp_get_drvdata(dev);
+	struct kpb_event_data *evd = event_data;
+	struct kpb_client *cli = evd->client_data;
+
+	comp_info(dev, "kpb_event_handler(): received event with ID: %d ",
+		  evd->event_id);
+
+	switch (evd->event_id) {
+	case KPB_EVENT_REGISTER_CLIENT:
+		kpb_register_client(kpb, cli);
+		break;
+	case KPB_EVENT_UNREGISTER_CLIENT:
+		/*TODO*/
+		break;
+	case KPB_EVENT_BEGIN_DRAINING:
+		kpb_init_draining(dev, cli);
+		break;
+	case KPB_EVENT_STOP_DRAINING:
+		/*TODO*/
+		break;
+	default:
+		comp_err(dev, "kpb_cmd(): unsupported command");
+		break;
+	}
+}
+#endif /* CONFIG_AMS */
 
 #ifdef __ZEPHYR__
 
@@ -615,8 +795,23 @@ static void kpb_free(struct comp_dev *dev)
 
 	comp_info(dev, "kpb_free()");
 
+#if CONFIG_AMS
+	/* Unregister KPB as AMS consumer */
+	int ret;
+
+	ret = kpb_unregister_ams_consumer(dev, kpb->kpd_uuid_id,
+					  kpb_ams_kpd_notification);
+	if (ret)
+		comp_err(dev, "kpb_free(): ams kpd error %d", ret);
+
+	ret = kpb_unregister_ams_consumer(dev, kpb->reg_cli_uuid_id,
+					  kpb_ams_register_cli_notification);
+	if (ret)
+		comp_err(dev, "kpb_free(): ams register client error %d", ret);
+#else
 	/* Unregister KPB from notifications */
 	notifier_unregister(dev, NULL, NOTIFIER_ID_KPB_CLIENT_EVT);
+#endif/* CONFIG_AMS */
 
 	/* Reclaim memory occupied by history buffer */
 	kpb_free_history_buffer(kpb->hd.c_hb);
@@ -691,6 +886,11 @@ static int kpb_params(struct comp_dev *dev,
 	kpb->host_buffer_size = params->buffer.size;
 	kpb->host_period_size = params->host_period_bytes;
 	kpb->config.sampling_width = params->sample_container_bytes * 8;
+
+#if CONFIG_AMS
+	kpb->kpd_uuid_id = AMS_INVALID_MSG_TYPE;
+	kpb->reg_cli_uuid_id = AMS_INVALID_MSG_TYPE;
+#endif
 
 	return 0;
 }
@@ -767,14 +967,31 @@ static int kpb_prepare(struct comp_dev *dev)
 		kpb->clients[i].r_ptr = NULL;
 	}
 
+#if CONFIG_AMS
+	/* Register KPB as AMS consumer */
+	ret = kpb_register_ams_consumer(dev, ams_kpd_msg_uuid, kpb->kpd_uuid_id,
+					kpb_ams_kpd_notification);
+	if (ret) {
+		comp_err(dev, "kpb_prepare(): register ams consumer kpd err %d", ret);
+		goto err;
+	}
+
+	ret = kpb_register_ams_consumer(dev, ams_reg_cli_msg_uuid,
+					kpb->reg_cli_uuid_id,
+					kpb_ams_register_cli_notification);
+	if (ret) {
+		comp_err(dev, "kpb_prepare(): register ams consumer reg_cli err %d", ret);
+		goto err;
+	}
+#else
 	/* Register KPB for notification */
 	ret = notifier_register(dev, NULL, NOTIFIER_ID_KPB_CLIENT_EVT,
 				kpb_event_handler, 0);
-	if (ret < 0) {
-		kpb_free_history_buffer(kpb->hd.c_hb);
-		kpb->hd.c_hb = NULL;
-		return -ENOMEM;
+	if (ret) {
+		comp_err(dev, "kpb_prepare(): notifier_register err %d", ret);
+		goto err;
 	}
+#endif /* CONFIG_AMS */
 
 #ifndef CONFIG_IPC_MAJOR_4
 	/* Search for KPB related sinks.
@@ -850,6 +1067,11 @@ static int kpb_prepare(struct comp_dev *dev)
 	kpb_change_state(kpb, KPB_STATE_RUN);
 
 	return ret;
+
+err:
+	kpb_free_history_buffer(kpb->hd.c_hb);
+	kpb->hd.c_hb = NULL;
+	return ret;
 }
 
 /**
@@ -912,8 +1134,10 @@ static int kpb_reset(struct comp_dev *dev)
 			kpb_reset_history_buffer(kpb->hd.c_hb);
 		}
 
+#ifndef CONFIG_AMS
 		/* Unregister KPB from notifications */
 		notifier_unregister(dev, NULL, NOTIFIER_ID_KPB_CLIENT_EVT);
+#endif
 		/* Finally KPB is ready after reset */
 		kpb_change_state(kpb, KPB_STATE_PREPARING);
 
@@ -1415,42 +1639,6 @@ static int kpb_buffer_data(struct comp_dev *dev,
 
 	kpb_change_state(kpb, state_preserved);
 	return ret;
-}
-
-/**
- * \brief Main event dispatcher.
- * \param[in] arg - KPB component internal data.
- * \param[in] type - notification type
- * \param[in] event_data - event specific data.
- * \return none.
- */
-static void kpb_event_handler(void *arg, enum notify_id type, void *event_data)
-{
-	struct comp_dev *dev = arg;
-	struct comp_data *kpb = comp_get_drvdata(dev);
-	struct kpb_event_data *evd = event_data;
-	struct kpb_client *cli = evd->client_data;
-
-	comp_info(dev, "kpb_event_handler(): received event with ID: %d ",
-		  evd->event_id);
-
-	switch (evd->event_id) {
-	case KPB_EVENT_REGISTER_CLIENT:
-		kpb_register_client(kpb, cli);
-		break;
-	case KPB_EVENT_UNREGISTER_CLIENT:
-		/*TODO*/
-		break;
-	case KPB_EVENT_BEGIN_DRAINING:
-		kpb_init_draining(dev, cli);
-		break;
-	case KPB_EVENT_STOP_DRAINING:
-		/*TODO*/
-		break;
-	default:
-		comp_err(dev, "kpb_cmd(): unsupported command");
-		break;
-	}
 }
 
 /**
