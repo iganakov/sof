@@ -1509,6 +1509,13 @@ static int copier_params(struct comp_dev *dev, struct sof_ipc_stream_params *par
 			if (dev->ipc_config.type == SOF_COMP_HOST && !cd->ipc_gtw) {
 				component_set_nearest_period_frames(dev, params->rate);
 				if (params->direction == SOF_IPC_STREAM_CAPTURE) {
+					enum sof_ipc_frame __sparse_cache dummy, out_ipc_fmt;
+
+					audio_stream_fmt_conversion(cd->out_fmt->depth,
+								    cd->out_fmt->valid_bit_depth,
+								    &dummy, &out_ipc_fmt,
+								    cd->out_fmt->s_type);
+					params->frame_fmt = out_ipc_fmt;
 					params->buffer.size = cd->config.base.obs;
 					params->sample_container_bytes = cd->out_fmt->depth / 8;
 					params->sample_valid_bytes =
