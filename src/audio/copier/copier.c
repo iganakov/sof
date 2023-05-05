@@ -1406,14 +1406,9 @@ static void copier_dma_cb(struct comp_dev *dev, size_t bytes)
 		host_one_shot_cb(cd->hd, bytes);
 
 	/* apply attenuation since copier copy missed this with host device remove */
-	if (cd->attenuation) {
-		if (dev->direction == SOF_IPC_STREAM_PLAYBACK)
-			sink = buffer_acquire(cd->hd->local_buffer);
-		else
-			sink = buffer_acquire(cd->hd->dma_buffer);
-
-		frames = bytes / get_sample_bytes(audio_stream_get_frm_fmt(&sink->stream));
-		frames = frames / audio_stream_get_channels(&sink->stream);
+	if (cd->attenuation && dev->direction == SOF_IPC_STREAM_PLAYBACK) {
+		sink = buffer_acquire(cd->hd->local_buffer);
+		frames = cd->config.base.obs / audio_stream_frame_bytes(&sink->stream);
 
 		ret = apply_attenuation(dev, cd, sink, frames);
 		if (ret < 0)
