@@ -8,7 +8,6 @@
 #include <sof/audio/component_ext.h>
 #include <module/module/base.h>
 #include <sof/common.h>
-#include <ipc4/dmic.h>
 #include <ipc/dai.h>
 #include "copier.h"
 #include <sof/lib/dai-zephyr.h>

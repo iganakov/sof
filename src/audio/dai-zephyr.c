@@ -9,6 +9,7 @@
 #include <sof/audio/component_ext.h>
 #include <sof/audio/format.h>
 #include <sof/audio/pipeline.h>
+#include <module/module/base.h>
 #include <sof/common.h>
 #include <rtos/panic.h>
 #include <sof/ipc/msg.h>
@@ -37,6 +38,7 @@
 
 #include "copier/copier.h"
 #include "copier/dai_copier.h"
+#include "copier/copier_gain.h"
 
 #include <zephyr/device.h>
 #include <zephyr/drivers/dai.h>
@@ -245,6 +247,8 @@ static enum dma_cb_status
 dai_dma_cb(struct dai_data *dd, struct comp_dev *dev, uint32_t bytes,
 	   pcm_converter_func *converter)
 {
+	struct processing_module *mod = comp_mod(dev);
+	struct copier_data *cd = module_get_private_data(mod);
 	enum dma_cb_status dma_status = DMA_CB_STATUS_RELOAD;
 	int ret;
 
@@ -280,6 +284,14 @@ dai_dma_cb(struct dai_data *dd, struct comp_dev *dev, uint32_t bytes,
 		 */
 		ret = dma_buffer_copy_from_no_consume(dd->dma_buffer, dd->local_buffer,
 						      dd->process, bytes);
+
+		if (dd->ipc_config.apply_gain) {
+			ret = copier_gain_input(dev, dd->local_buffer, dd->gain_data,
+						ADDITION, bytes);
+			if (ret)
+				comp_err(dev, "copier_gain_input() failed err=%d", ret);
+			buffer_stream_writeback(dd->local_buffer, bytes);
+		}
 #if CONFIG_IPC_MAJOR_4
 		struct list_item *sink_list;
 		/* Skip in case of endpoint DAI devices created by the copier */

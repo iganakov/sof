@@ -10,7 +10,6 @@
 
 #include <sof/audio/buffer.h>
 #include <xtensa/tie/xt_hifi3.h>
-#include <ipc4/dmic.h>
 #include <ipc4/base_fw.h>
 #include <ipc/dai.h>
 
@@ -102,7 +101,7 @@ struct copier_gain_params {
  * Coefficients are encoded in Q10 format.
  */
 struct gain_dma_control_data {
-	uint16_t gain_coeffs[DMIC_MAX_GAIN_COEFFS_CNT];
+	uint16_t gain_coeffs[MAX_GAIN_COEFFS_CNT];
 } __packed __aligned(4);
 
 /**
@@ -204,7 +203,7 @@ enum copier_gain_state copier_gain_eval_state(struct copier_gain_params *gain_pa
  * @return 0 on success, otherwise a negative error code.
  */
 int copier_set_gain(struct comp_dev *dev, struct dai_data *dd,
-					struct gain_dma_control_data *gain_data);
+		    struct gain_dma_control_data *gain_data);
 
 /**
  * Checks for uniti gain mode.
