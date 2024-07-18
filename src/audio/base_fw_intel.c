@@ -9,6 +9,8 @@
 #include <rtos/string.h>
 #include <sof/tlv.h>
 #include <sof/lib/dai.h>
+#include <ipc/dai.h>
+#include <ipc4/error_status.h>
 
 #if defined(CONFIG_SOC_SERIES_INTEL_ADSP_ACE)
 #include <intel_adsp_hda.h>
@@ -22,6 +24,8 @@
 
 #include <ipc4/base_fw.h>
 #include <rimage/sof/user/manifest.h>
+#include "copier/copier.h"
+#include "copier/copier_gain.h"
 
 struct ipc4_modules_info {
 	uint32_t modules_count;
@@ -327,36 +331,53 @@ static inline bool is_ssp_node_id(uint32_t dma_type)
 	       dma_type == ipc4_i2s_link_input_class;
 }
 
-int basefw_vendor_dma_control(uint32_t node_id, const char *config_data, size_t data_size)
+int basefw_vendor_dma_control(uint32_t node_id, const uint32_t *config_data,
+			      size_t config_size)
 {
 	union ipc4_connector_node_id node = (union ipc4_connector_node_id)node_id;
+	const struct device *dev;
 	int ret, result;
 
 	tr_info(&basefw_comp_tr, "node_id 0x%x, config_data 0x%x, data_size %u",
-		node_id, (uint32_t)config_data, data_size);
-	if (!is_ssp_node_id(node.f.dma_type)) {
-		tr_err(&basefw_comp_tr, "Unsupported or invalid node_id: 0x%x for DMA Control",
-		       node_id);
-		return -EOPNOTSUPP;
-	}
+		node_id, (uint32_t)config_data, config_size);
 
-	const struct device *dev = dai_get_device(DAI_INTEL_SSP, node.f.v_index);
+	switch (node.f.dma_type) {
+	case ipc4_dmic_link_input_class:
+		/* In DMIC case we don't need to update zephyr dai params */
+		dev = NULL;
+		ret = copier_gain_dma_control(node_id, config_data, config_size,
+					      SOF_DAI_INTEL_DMIC);
+		if (ret) {
+			tr_err(&basefw_comp_tr,
+			       "Failed to update copier gain coefs, error: %d", ret);
+			return IPC4_INVALID_REQUEST;
+		}
+		return IPC4_SUCCESS;
+	case ipc4_i2s_link_output_class:
+	case ipc4_i2s_link_input_class:
+		dev = dai_get_device(DAI_INTEL_SSP, node.f.v_index);
+		break;
+	default:
+		tr_err(&basefw_comp_tr, "DAI device=%d with node_id: 0x%x not supported",
+		       node.f.dma_type, node_id);
+		return IPC4_INVALID_REQUEST;
+	}
 
 	if (!dev) {
 		tr_err(&basefw_comp_tr,
 		       "Failed to find the SSP DAI device for node_id: 0x%x",
 		       node_id);
-		return -EINVAL;
+		return IPC4_ERROR_INVALID_PARAM;
 	}
 
 	ret = pm_device_runtime_get(dev);
 	if (ret < 0) {
 		tr_err(&basefw_comp_tr, "Failed to get resume device, error: %d",
 		       ret);
-		return ret;
+		return IPC4_ERROR_INVALID_PARAM;
 	}
 
-	result = dai_config_update(dev, config_data, data_size);
+	result = dai_config_update(dev, config_data, config_size);
 	if (result < 0)
 		tr_err(&basefw_comp_tr,
 		       "Failed to set DMA control for SSP DAI, error: %d",
@@ -365,7 +386,7 @@ int basefw_vendor_dma_control(uint32_t node_id, const char *config_data, size_t 
 	ret = pm_device_runtime_put(dev);
 	if (ret < 0)
 		tr_err(&basefw_comp_tr, "Failed to suspend device, error: %d",
-		       ret);
+		       IPC4_ERROR_INVALID_PARAM);
 
 	return result;
 }

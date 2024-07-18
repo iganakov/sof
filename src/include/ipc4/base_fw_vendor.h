@@ -86,14 +86,13 @@ int basefw_vendor_set_large_config(struct comp_dev *dev,
 /**
  * @brief Vendor specific routine to configure DMA gateway.
  *
- * @param node_id The node ID of the DMA gateway to configure.
- * @param config_data pointer to the configuration data.
- * @param data_size Size of the configuration data.
+ * @param node_id Node ID of the DMA gateway.
+ * @param config_data pointer to the configuration data containing tlv.
+ * @param config_size Size of the configuration data.
  * @return 0 if successful, error code otherwise.
  */
-int basefw_vendor_dma_control(uint32_t node_id,
-			      const char *config_data,
-			      size_t data_size);
+int basefw_vendor_dma_control(uint32_t node_id, const uint32_t *config_data,
+			      size_t config_size);
 
 #else /* !CONFIG_IPC4_BASE_FW_INTEL */
 
@@ -145,9 +144,8 @@ static inline int basefw_vendor_set_large_config(struct comp_dev *dev,
 	return IPC4_UNKNOWN_MESSAGE_TYPE;
 }
 
-static inline int basefw_vendor_dma_control(uint32_t node_id,
-					    const char *config_data,
-					    size_t data_size)
+static inline int basefw_vendor_dma_control(uint32_t node_id, const uint32_t *config_data,
+					    size_t config_size)
 {
 	return IPC4_UNKNOWN_MESSAGE_TYPE;
 }
