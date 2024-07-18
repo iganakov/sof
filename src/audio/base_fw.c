@@ -498,35 +498,30 @@ static int basefw_dma_control(bool first_block,
 			      const char *data)
 {
 	struct ipc4_dma_control *dma_control;
-	size_t data_size;
+	const uint32_t *config_data;
+	size_t config_size;
 	int ret;
 
 	/* Ensure that the message is atomic and contains all necessary information */
 	if (!first_block || !last_block) {
 		tr_err(&ipc_tr, "Non-atomic DMA Control message received");
-		return -EINVAL;
+		return IPC4_ERROR_INVALID_PARAM;
 	}
 
 	dma_control = (struct ipc4_dma_control *)data;
-	if (dma_control->config_length > 0) {
-		/* DMA Control is passed using a structure with the same construction as in DAI
-		 * configuration. There is an additional section whose size is not accounted for in
-		 * the config_length field. As a result, the configuration size will always be 0.
-		 */
-		tr_err(&ipc_tr, "The expected size of the data is 0.");
-		return -EINVAL;
-	}
+	config_data = dma_control->config_data;
 
-	data_size = data_offset - (sizeof(struct ipc4_dma_control) - sizeof(uint32_t));
-	ret = basefw_vendor_dma_control(dma_control->node_id,
-					(const char *)dma_control->config_data,
-					data_size);
+	/* config_length is set as number of dwords */
+	config_size = dma_control->config_length * sizeof(uint32_t);
+
+	ret = basefw_vendor_dma_control(dma_control->node_id, config_data,
+					config_size);
 	if (ret < 0) {
 		tr_err(&ipc_tr, "DMA gateway configuration failed, error: %d", ret);
 		return ret;
 	}
 
-	return 0;
+	return IPC4_SUCCESS;
 }
 
 static int basefw_set_large_config(struct comp_dev *dev,
