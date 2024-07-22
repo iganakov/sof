@@ -1,0 +1,137 @@
+/* SPDX-License-Identifier: BSD-3-Clause
+ *
+ * Copyright(c) 2024 Intel Corporation. All rights reserved.
+ *
+ * Author: Ievgen Ganakov <ievgen.ganakov@intel.com>
+ */
+
+#ifndef __SOF_COPIER_GAIN_H__
+#define __SOF_COPIER_GAIN_H__
+
+#include <sof/audio/buffer.h>
+#include <xtensa/tie/xt_hifi3.h>
+#include <ipc4/dmic.h>
+#include <ipc4/base_fw.h>
+#include <ipc/dai.h>
+
+/**
+ * @file copier_gain.h
+ * @brief Header file containing definitions and functions related to audio gain
+ * processing for a copier module.
+ *
+ * This file provides functions, constants and structure defifnitions for applying gain to
+ * input audio buffers, both in 16-bit and 32-bit formats. The gain can be applied in
+ * different directions (addition or subtraction) and different states (mute, gain, static).
+ *
+ * @note This file assumes the presence of a `comp_buffer` structure and the `ae_int16x4`,
+ * `ae_int32x2`, `ae_f16x4`, and `ae_valign` types.
+ */
+
+#define MAX_GAIN_COEFFS_CNT 4 /**< Maximum number of gain coefficients */
+
+/* Common const values for applying gain feature */
+#define Q10_TO_Q31_SHIFT 6
+#define Q10_TO_Q15_SHIFT 5
+
+/* 16x2 store operation requires shift to middle part of 32 bit register */
+#define I64_TO_I16_SHIFT  48
+#define MIDDLE_PART_SHIFT 8
+
+/* Unit gain in q10 format applied by default */
+#define UNITY_GAIN_4X_Q10  0x0400040004000400ULL
+#define UNITY_GAIN_GENERIC 0x400
+#define MAX_INT64          0x7FFFFFFFFFFFFFFFULL
+
+/* Default volume transition delays */
+#define GAIN_DEFAULT_HQ_TRANS_MS     500
+#define GAIN_DEFAULT_SPEECH_TRANS_MS 100
+#define GAIN_ZERO_TRANS_MS           0xFFFF
+
+struct dai_data;
+
+/**
+ * @brief Enumeration representing the state of the copier gain processing.
+ */
+enum copier_gain_state {
+	TRANS_MUTE = 0, /**< Transition to mute state */
+	TRANS_GAIN = 1, /**< Transition to gain state */
+	STATIC_GAIN = 2, /**< Static gain state */
+};
+
+/**
+ * @brief Enumeration representing the direction of the copier gain processing.
+ */
+enum copier_gain_direction {
+	ADDITION = 0,	/**< Addition gain direction */
+	SUBTRACTION = 1 /**< Subtraction gain direction */
+};
+
+/**
+ * @brief Structure representing the parameters for copier gain processing.
+ */
+struct copier_gain_params {
+#if SOF_USE_HIFI(3, COPIER) || SOF_USE_HIFI(4, COPIER) || SOF_USE_HIFI(5, COPIER)
+	/**< Input gain coefficients in Q10 format */
+	ae_int16x4 gain_coeffs[ROUND_UP(MAX_GAIN_COEFFS_CNT, 4) >> 2];
+	/**< Step for fade-in lower precision */
+	ae_f16x4 step_f16;
+	/**< Initial gain depending on the number of channels */
+	ae_f16x4 init_gain;
+#else /* Generic version of gain processing */
+	/**< Input gain coefficients */
+	uint16_t gain_coeffs[MAX_GAIN_COEFFS_CNT];
+	/**< Step for fade-in */
+	uint16_t step_f16;
+	/**< Initial gain */
+	uint16_t init_gain[MAX_GAIN_COEFFS_CNT];
+#endif
+	bool unity_gain; /**< Indicates unity gain coefficients, no processing is required */
+	uint32_t silence_sg_count;  /**< Accumulates sample group spent on silence */
+	uint32_t fade_in_sg_count;  /**< Accumulates sample group spent on fade-in */
+	uint32_t silence_sg_length; /**< Total count of sample group spent on silence */
+	uint32_t fade_sg_length;    /**< Total count of sample group spent on fade-in */
+	uint64_t gain_env;  /**< Gain envelope for fade-in calculated in high precision */
+	uint64_t step_i64;  /**< Step for fade-in envelope in high precision */
+	uint16_t container; /**< Size of sample container (in number of bits) */
+	uint16_t chanels_count; /**< Number of channels */
+};
+
+/**
+ * @brief Sets gain parameters.
+ *
+ * This function sets the gain parameters for the copier component specified by
+ * the given device and DAI data.
+ *
+ * @param dev The pointer to the component device structure.
+ * @param dd The pointer to the DAI data structure.
+ * @return 0 on success, negative error code on failure.
+ */
+int copier_gain_set_params(struct comp_dev *dev, struct dai_data *dd);
+
+/**
+ * @brief Sets the basic gain parameters.
+ *
+ * This function sets the basic gain parameters for the copier component specified
+ * by the given device and DAI data.
+ *
+ * @param dev The pointer to the component device structure.
+ * @param dd The pointer to the DAI data structure.
+ */
+void copier_gain_set_basic_params(struct comp_dev *dev, struct dai_data *dd);
+
+/**
+ * @brief Sets the gain fade parameters.
+ *
+ * This function sets the fade gain parameters for the copier component specified
+ * by the given device and DAI data.
+ *
+ * @param dev The pointer to the component device structure.
+ * @param dd The pointer to the DAI data structure.
+ * @param fade_period The fade period in milliseconds.
+ * @param frames The number of frames to fade.
+ * @return 0 on success, negative error code on failure.
+ */
+int copier_gain_set_fade_params(struct comp_dev *dev, struct dai_data *dd,
+				uint32_t fade_period, uint32_t frames);
+
+#endif /* __SOF_COPIER_GAIN_H__ */

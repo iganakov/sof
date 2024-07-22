@@ -6,8 +6,12 @@
 
 #include <ipc4/base-config.h>
 #include <sof/audio/component_ext.h>
-#include "copier.h"
+#include <module/module/base.h>
 #include <sof/common.h>
+#include <ipc4/dmic.h>
+#include <ipc/dai.h>
+#include "copier.h"
+#include <sof/lib/dai-zephyr.h>
 
 LOG_MODULE_DECLARE(copier, CONFIG_SOF_LOG_LEVEL);
 
@@ -56,6 +60,55 @@ int apply_attenuation(struct comp_dev *dev, struct copier_data *cd,
 		return -EINVAL;
 	}
 }
+
+void copier_gain_set_basic_params(struct comp_dev *dev, struct dai_data *dd)
+{
+	struct copier_gain_params *gain_params = dd->gain_data;
+	struct ipc4_copier_module_cfg *copier_cfg = dd->dai_spec_config;
+
+	gain_params->chanels_count = copier_cfg->base.audio_fmt.depth;
+	gain_params->container = copier_cfg->base.audio_fmt.channels_count;
+
+	for (int i = 0; i < MAX_GAIN_COEFFS_CNT; i++)
+		gain_params->gain_coeffs[i] = UNITY_GAIN_GENERIC;
+}
+
+int copier_gain_set_fade_params(struct comp_dev *dev, struct dai_data *dd,
+				uint32_t fade_period, uint32_t frames)
+{
+	struct copier_gain_params *gain_params = dd->gain_data;
+	struct ipc4_copier_module_cfg *copier_cfg = dd->dai_spec_config;
+
+	if (fade_period == 0) {
+		/* Default fade transition delay for speech */
+		gain_params->fade_sg_length = frames * GAIN_DEFAULT_SPEECH_TRANS_MS;
+
+		/* Default fade transition delay for high quality mode */
+		if (copier_cfg->base.audio_fmt.sampling_frequency > IPC4_FS_16000HZ)
+			gain_params->fade_sg_length = frames * GAIN_DEFAULT_HQ_TRANS_MS;
+
+	} else if (fade_period == GAIN_ZERO_TRANS_MS) {
+		/* Special case for GAIN_ZERO_TRANS_MS to support zero fade-in transition time */
+		gain_params->fade_sg_length = 0;
+		return 0;
+	}
+
+	/* High precision step for fade-in calculation, keeps accurate precision */
+	gain_params->step_i64 = MAX_INT64 / gain_params->fade_sg_length;
+	uint16_t step_i64_to_i16 = gain_params->step_i64 >> I64_TO_I16_SHIFT;
+
+	/* lower precision step for HIFI SIMD fade-in calculation */
+	gain_params->step_f16 = (uint16_t)((MAX_GAIN_COEFFS_CNT / gain_params->chanels_count) *
+					   step_i64_to_i16);
+
+	/* Initialization gain for HIFI SIMD addition, depends on channel configuration */
+	for (int i = 0; i < MAX_GAIN_COEFFS_CNT; i++)
+		gain_params->init_gain[i] = (i / gain_params->chanels_count) *
+					    step_i64_to_i16;
+
+	return 0;
+}
+
 #endif
 
 void copier_update_params(struct copier_data *cd, struct comp_dev *dev,
