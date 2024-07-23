@@ -8,6 +8,8 @@
 #include <ipc4/base-config.h>
 #include <sof/audio/component_ext.h>
 #include <module/module/base.h>
+#include <sof/tlv.h>
+#include <ipc4/dmic.h>
 #include "copier.h"
 #include "copier_gain.h"
 
@@ -28,6 +30,21 @@ int copier_gain_set_params(struct comp_dev *dev, struct dai_data *dd)
 	copier_gain_set_basic_params(dev, dd);
 
 	switch (dd->dai->type) {
+	case SOF_DAI_INTEL_DMIC:
+		struct dmic_config_data *dmic_gtw_cfg = cd->gtw_cfg;
+		struct dmic_ext_global_cfg *dmic_ext_glb_cfg =
+			&dmic_gtw_cfg->dmic_blob.global_cfg.ext_cfg;
+
+		if (!dmic_ext_glb_cfg) {
+			comp_err(dev, "No dmic global config found");
+			return -EINVAL;
+		}
+
+		fade_period = dmic_ext_glb_cfg->fade_in_period;
+		/* Convert and assign silence and fade length values received in DMIC blob */
+		gain_params->silence_sg_length = frames * dmic_ext_glb_cfg->silence_period;
+		gain_params->fade_sg_length = frames * fade_period;
+		break;
 	default:
 		fade_period = 0;
 		break;
@@ -84,6 +101,7 @@ int copier_gain_dma_control(uint32_t node_id, const uint32_t *config_data,
 			    size_t config_size, enum sof_ipc_dai_type dai_type)
 {
 	union ipc4_connector_node_id node = (union ipc4_connector_node_id)node_id;
+	struct sof_tlv *tlv = (struct sof_tlv *)config_data;
 	struct gain_dma_control_data *gain_data = NULL;
 	struct ipc_comp_dev *icd = NULL;
 	struct processing_module *mod = NULL;
@@ -108,6 +126,23 @@ int copier_gain_dma_control(uint32_t node_id, const uint32_t *config_data,
 		cd = module_get_private_data(mod);
 
 		switch (dai_type) {
+		case SOF_DAI_INTEL_DMIC:
+			if (cd->dd[0]->dai->index != node.f.v_index)
+				continue;
+
+			if (!config_size) {
+				comp_err(dev, "Config length for DMIC couldn't be zero");
+				return -EINVAL;
+			}
+
+			/* Gain coefficients for DMIC */
+			void *tlv_val = tlv_value_ptr_get(tlv, DMIC_SET_GAIN_COEFFICIENTS);
+			if (!tlv_val) {
+				comp_err(dev, "No gain coefficients in DMA_CONTROL ipc");
+				return -EINVAL;
+			}
+			gain_data = tlv_val;
+			break;
 		default:
 			comp_warn(dev, "Gain DMA control: no dai type=%d found", dai_type);
 			break;
