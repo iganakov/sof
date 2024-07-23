@@ -8,6 +8,8 @@
 #include <ipc4/base-config.h>
 #include <sof/audio/component_ext.h>
 #include <module/module/base.h>
+#include <sof/tlv.h>
+#include <ipc4/dmic.h>
 #include "copier.h"
 #include "copier_gain.h"
 
@@ -26,6 +28,31 @@ int copier_gain_set_params(struct comp_dev *dev, struct dai_data *dd)
 
 	/* Set basic gain parameters */
 	copier_gain_set_basic_params(dev, dd, ipc4_cfg);
+
+	switch (dd->dai->type) {
+	case SOF_DAI_INTEL_DMIC:
+		{
+			struct dmic_config_data *dmic_cfg = cd->gtw_cfg;
+			union dmic_global_cfg *dmic_glb_cfg = &dmic_cfg->dmic_blob.global_cfg;
+
+			if (!dmic_glb_cfg) {
+				comp_err(dev, "No dmic global config found");
+				return -EINVAL;
+			}
+
+			fade_period = dmic_glb_cfg->ext_global_cfg.fade_in_period;
+			/* Convert and assign silence and fade length values received
+			 * in DMIC blob.
+			 */
+			gain_params->silence_sg_length =
+				frames * dmic_glb_cfg->ext_global_cfg.silence_period;
+			gain_params->fade_sg_length = frames * fade_period;
+		}
+		break;
+	default:
+		comp_info(dev, "Apply default fade period for dai type %d", dd->dai->type);
+		break;
+	}
 
 	/* Set fade parameters */
 	ret = copier_gain_set_fade_params(dev, dd, ipc4_cfg, fade_period, frames);
@@ -78,16 +105,18 @@ int copier_gain_dma_control(uint32_t node_id, const uint32_t *config_data,
 			    size_t config_size, enum sof_ipc_dai_type dai_type)
 {
 	union ipc4_connector_node_id node = (union ipc4_connector_node_id)node_id;
+	struct sof_tlv *tlv = (struct sof_tlv *)config_data;
 	struct ipc *ipc = ipc_get();
 	struct gain_dma_control_data *gain_data;
 	struct ipc_comp_dev *icd;
 	struct comp_dev *dev;
 	struct list_item *clist;
-
+	void *tlv_val;
 	int ret;
 
 	list_for_item(clist, &ipc->comp_list) {
 		gain_data = NULL;
+		tlv_val = NULL;
 
 		icd = container_of(clist, struct ipc_comp_dev, list);
 
@@ -102,9 +131,33 @@ int copier_gain_dma_control(uint32_t node_id, const uint32_t *config_data,
 		struct processing_module *mod = comp_mod(dev);
 		struct copier_data *cd = module_get_private_data(mod);
 
+		switch (dai_type) {
+		case SOF_DAI_INTEL_DMIC:
+			if (cd->dd[0]->dai->index != node.f.v_index)
+				continue;
+
+			if (!config_size) {
+				comp_err(dev, "Config length for DMIC couldn't be zero");
+				return -EINVAL;
+			}
+
+			/* Gain coefficients for DMIC */
+			tlv_val = tlv_value_ptr_get(tlv, DMIC_SET_GAIN_COEFFICIENTS);
+			if (!tlv_val) {
+				comp_err(dev, "No gain coefficients in DMA_CONTROL ipc");
+				return -EINVAL;
+			}
+			gain_data = tlv_val;
+			break;
+		default:
+			comp_warn(dev, "Gain DMA control: no dai type=%d found", dai_type);
+			break;
+		}
+
 		ret = copier_set_gain(dev, cd->dd[0], gain_data);
 		if (ret)
 			comp_err(dev, "Gain DMA control: failed to set gain");
+
 		return ret;
 	}
 

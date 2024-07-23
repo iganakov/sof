@@ -318,6 +318,10 @@ int copier_dai_create(struct comp_dev *dev, struct copier_data *cd,
 			return -EINVAL;
 		}
 		dai.out_fmt = &copier->out_fmt;
+#if CONFIG_COPIER_GAIN
+		/* Enable gain for DMIC interface */
+		dai.apply_gain = true;
+#endif
 		break;
 	default:
 		return -EINVAL;
